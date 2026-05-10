@@ -1,0 +1,39 @@
+# Server
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+aiofiles>=23.0.0
+
+# Database
+sqlalchemy>=2.0.0
+
+# Config
+python-dotenv>=1.0.0
+
+# HTTP client
+httpx>=0.27.0
+
+# ML / CV  (existing deps kept)
+torch>=2.0.0
+torchvision>=0.15.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# OCR + Barcode
+easyocr>=1.7.0
+pyzbar>=0.1.9
+
+# TTS fallback
+pyttsx3>=2.90
+
+# Local LLM
+ollama>=0.2.0
+
+# SMS
+twilio>=9.0.0
+
+# Image
+Pillow>=10.0.0
+
+# ZMQ (kept for legacy server.py compatibility)
+pyzmq>=25.0.0

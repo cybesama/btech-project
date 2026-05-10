@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Guidance System</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="stylesheet" href="/style.css" />
+  <meta name="theme-color" content="#0a0a0a" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+</head>
+<body>
+
+  <!-- Hidden camera elements -->
+  <video id="camera" autoplay playsinline muted></video>
+  <canvas id="capture" style="display:none"></canvas>
+
+  <div id="app">
+
+    <!-- ── Top bar ── -->
+    <header id="top-bar">
+      <span id="mode-label">NAVIGATION</span>
+      <span id="gps-label" style="font-size:0.75rem;color:var(--text-dim)">GPS…</span>
+      <span id="status-dot"></span>
+    </header>
+
+    <!-- ── Mode buttons ── -->
+    <section id="mode-buttons">
+      <button class="mode-btn active" id="btn-navigation" onclick="setMode('navigation')" aria-label="Navigation mode">
+        Navigate
+      </button>
+      <button class="mode-btn" id="btn-shopping" onclick="setMode('shopping')" aria-label="Shopping mode">
+        Shop
+      </button>
+      <button class="mode-btn" id="btn-describe" onclick="setMode('describe')" aria-label="Describe surroundings">
+        Describe
+      </button>
+      <button class="mode-btn sos" id="btn-sos"
+        onclick="setMode('sos')"
+        onpointerdown="startSOSTimer()"
+        onpointerup="cancelSOSTimer()"
+        onpointercancel="cancelSOSTimer()"
+        aria-label="Emergency SOS — tap to manage contacts, hold 3 seconds to send SOS">
+        SOS
+      </button>
+    </section>
+
+    <!-- ── Navigation panel ── -->
+    <section id="nav-panel" class="panel">
+      <div class="input-row">
+        <input id="dest-input" type="text" placeholder="Where do you want to go?" autocomplete="off" />
+        <button id="go-btn" onclick="handleGoBtn()">Go</button>
+      </div>
+      <div id="nav-instruction" class="instruction-text">Waiting for GPS…</div>
+      <div id="map-container"></div>
+      <div id="saved-routes"></div>
+
+      <!-- Voice commands reference -->
+      <div class="section-label" style="margin-top:8px">Voice commands (tap Mic first)</div>
+      <div class="help-box">
+        <b>Navigate:</b> "go to [place]" · "take me to [place]"<br>
+        <b>Find nearby:</b> "find hospital" · "find pharmacy" · "find police"<br>
+        <b>Mode:</b> "shopping mode" · "describe mode" · "navigation mode"<br>
+        <b>Shop:</b> "pick [item]" · "done" · "shopping list"<br>
+        <b>Emergency:</b> "emergency" · "help me"
+      </div>
+    </section>
+
+    <!-- ── Shopping panel ── -->
+    <section id="shop-panel" class="panel hidden">
+      <div id="shop-status" class="instruction-text">Point camera at shelf to begin scanning.</div>
+      <button class="action-btn" onclick="window.sendCommand('list')">Read Shopping List</button>
+      <button class="action-btn" onclick="window.sendCommand('done')">Done with Item</button>
+    </section>
+
+    <!-- ── Describe panel ── -->
+    <section id="describe-panel" class="panel hidden">
+      <div id="describe-status" class="instruction-text">AI will describe your surroundings. Tap the button or wait 30 s for auto-describe.</div>
+      <button class="action-btn" onclick="window.triggerDescribe()">Describe Now</button>
+    </section>
+
+    <!-- ── SOS / Emergency Contacts panel ── -->
+    <section id="sos-panel" class="panel hidden">
+      <div class="instruction-text" style="border-color:var(--sos)">
+        <b style="color:var(--sos)">HOLD the SOS button 3 seconds to send emergency alert.</b><br>
+        Add contacts below — they will receive your GPS location by SMS.
+      </div>
+
+      <!-- Add contact form -->
+      <div class="section-label">Add emergency contact</div>
+      <input id="contact-name" type="text" placeholder="Contact name" class="text-input" />
+      <input id="contact-phone" type="tel" placeholder="Phone number (e.g. +919876543210)" class="text-input" />
+      <button class="action-btn" style="border-color:var(--sos);color:var(--sos)" onclick="addContact()">
+        Add Contact
+      </button>
+
+      <!-- Contacts list -->
+      <div class="section-label" style="margin-top:8px">Saved contacts</div>
+      <div id="contacts-list"></div>
+
+      <button class="action-btn" onclick="setMode('navigation')" style="margin-top:8px">← Back</button>
+    </section>
+
+    <!-- ── Voice feedback bar ── -->
+    <footer id="voice-bar">
+      <div id="voice-text">Ready</div>
+      <button id="mic-btn" onclick="toggleMic()" aria-label="Toggle voice commands">
+        Mic
+      </button>
+    </footer>
+
+  </div><!-- #app -->
+
+  <script type="module">
+    import { speak, startListening, stopListening, streamDescription } from "/voice.js";
+    import { initCamera, sendCommand } from "/camera.js";
+    import { initMaps, navigateTo, findPOI, loadSavedRoutes, invalidateMap } from "/navigation.js";
+
+    // ── Panel map: mode name → panel element ID ───────────────────────────────
+    const PANEL_MAP = {
+      navigation: "nav-panel",
+      shopping:   "shop-panel",
+      describe:   "describe-panel",
+      sos:        "sos-panel",
+    };
+
+    // ── SOS hold timer ────────────────────────────────────────────────────────
+    let _sosTimer = null;
+
+    window.startSOSTimer = () => {
+      speak("Hold for 3 seconds to send SOS.");
+      _sosTimer = setTimeout(() => window.triggerSOS(), 3000);
+    };
+    window.cancelSOSTimer = () => clearTimeout(_sosTimer);
+
+    window.triggerSOS = async () => {
+      speak("Sending emergency SOS now.");
+      navigator.geolocation.getCurrentPosition(async (pos) => {
+        const res = await fetch("/emergency/sos", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+        });
+        if (res.ok) {
+          speak("SOS sent to your emergency contacts.");
+        } else {
+          const err = await res.json().catch(() => ({}));
+          speak(err.detail || "SOS failed. Make sure contacts are added.");
+        }
+      }, () => speak("Could not get your location for SOS."));
+    };
+
+    // ── Emergency contacts ────────────────────────────────────────────────────
+    async function loadContacts() {
+      const res = await fetch("/emergency/contacts");
+      if (!res.ok) return;
+      const contacts = await res.json();
+      const container = document.getElementById("contacts-list");
+      if (!container) return;
+      if (!contacts.length) {
+        container.innerHTML = "<p style='color:var(--text-dim);font-size:0.9rem'>No contacts yet.</p>";
+        return;
+      }
+      container.innerHTML = contacts.map(c => `
+        <div class="contact-row">
+          <span>${c.name} &nbsp; <span style="color:var(--text-dim)">${c.phone}</span></span>
+          <button class="del-btn" onclick="deleteContact(${c.id})">✕</button>
+        </div>
+      `).join("");
+    }
+
+    window.addContact = async () => {
+      const name  = document.getElementById("contact-name").value.trim();
+      const phone = document.getElementById("contact-phone").value.trim();
+      if (!name || !phone) { speak("Please enter both a name and a phone number."); return; }
+      const res = await fetch("/emergency/contacts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, phone }),
+      });
+      if (res.ok) {
+        speak(`${name} added as emergency contact.`);
+        document.getElementById("contact-name").value  = "";
+        document.getElementById("contact-phone").value = "";
+        loadContacts();
+      } else {
+        speak("Failed to add contact.");
+      }
+    };
+
+    window.deleteContact = async (id) => {
+      await fetch(`/emergency/contacts/${id}`, { method: "DELETE" });
+      speak("Contact removed.");
+      loadContacts();
+    };
+
+    // ── Mode switcher ─────────────────────────────────────────────────────────
+    window.setMode = (mode) => {
+      document.querySelectorAll(".mode-btn").forEach(b => b.classList.remove("active"));
+      const modeBtn = document.getElementById(`btn-${mode}`);
+      if (modeBtn) modeBtn.classList.add("active");
+
+      document.getElementById("mode-label").textContent = mode.toUpperCase();
+
+      document.querySelectorAll(".panel").forEach(p => p.classList.add("hidden"));
+      const panelId = PANEL_MAP[mode] || "nav-panel";
+      document.getElementById(panelId).classList.remove("hidden");
+
+      if (mode === "sos") {
+        loadContacts();
+        return;  // don't send mode command to backend for SOS panel
+      }
+
+      if (mode === "navigation") {
+        setTimeout(() => invalidateMap(), 50);
+      }
+
+      sendCommand(`mode:${mode}`);
+      speak(`${mode} mode.`);
+    };
+
+    // ── Navigation input ──────────────────────────────────────────────────────
+    window.handleGoBtn = () => {
+      const dest = document.getElementById("dest-input").value.trim();
+      if (dest) navigateTo(dest);
+      else speak("Please type or say a destination.");
+    };
+    document.getElementById("dest-input")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") window.handleGoBtn();
+    });
+
+    // ── Mic toggle ────────────────────────────────────────────────────────────
+    let _micOn = false;
+    window.toggleMic = () => {
+      _micOn = !_micOn;
+      document.getElementById("mic-btn").textContent = _micOn ? "Mic ON" : "Mic";
+      document.getElementById("mic-btn").classList.toggle("active", _micOn);
+      if (_micOn) startListening();
+      else stopListening();
+    };
+
+    // ── On-demand describe ────────────────────────────────────────────────────
+    window.triggerDescribe = () => {
+      speak("Describing surroundings now.");
+      document.getElementById("describe-status").textContent = "Asking AI…";
+      streamDescription([]).then(() => {
+        document.getElementById("describe-status").textContent = "Done. Tap again for new description.";
+      });
+    };
+
+    // ── Expose helpers for voice.js ───────────────────────────────────────────
+    window.navigateTo  = navigateTo;
+    window.findPOI     = findPOI;
+    window.sendCommand = sendCommand;
+
+    // ── Bootstrap ─────────────────────────────────────────────────────────────
+    initCamera();
+    initMaps();
+
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js");
+    }
+
+    speak("Guidance system ready. Tap Navigate, Shop, Describe, or S O S to begin.");
+  </script>
+
+</body>
+</html>
